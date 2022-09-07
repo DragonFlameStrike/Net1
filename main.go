@@ -1,151 +1,60 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	"strconv"
-	"strings"
+	"time"
 )
 
-func main() {
-	prog := "mcast_listener"
+const (
+	srvAddr         = "224.0.0.1:9999"
+	maxDatagramSize = 8192
+)
 
-	if len(os.Args) != 5 {
-		fmt.Printf("usage:   %s interface protocol group     address:port\n", prog)
-		fmt.Printf("example: %s eth2      udp      224.0.0.9 0.0.0.0:2000\n", prog)
+var Name string
+
+func main() {
+	if len(os.Args) != 2 {
+		fmt.Println("example: ./main name")
 		return
 	}
-
-	ifname := os.Args[1]
-	proto := os.Args[2]
-	group := os.Args[3]
-	addrPort := os.Args[4]
-
-	mcastRead(ifname, proto, group, addrPort)
+	Name = os.Args[1]
+	go ping(srvAddr)
+	serveMulticastUDP(srvAddr, msgHandler)
 }
 
-func mcastRead(ifname, proto, group, addrPort string) {
-	addr, port := splitHostPort(addrPort)
-	p, err1 := strconv.Atoi(port) //p
-	if err1 != nil {
-		log.Fatal(err1)
+func ping(a string) {
+	addr, err := net.ResolveUDPAddr("udp", a)
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	a := net.ParseIP(addr)
-	if a == nil {
-		log.Fatal(fmt.Errorf("bad address: '%s'", addr))
+	c, err := net.DialUDP("udp", nil, addr)
+	for i := 1; i < 100; i++ {
+		c.Write([]byte(Name))
+		time.Sleep(5 * time.Second)
 	}
+}
 
-	g := net.ParseIP(group)
-	if g == nil {
-		log.Fatal(fmt.Errorf("bad group: '%s'", group))
+func msgHandler(src *net.UDPAddr, n int, b []byte) {
+	log.Println(hex.Dump(b[:n]))
+}
+
+func serveMulticastUDP(a string, h func(*net.UDPAddr, int, []byte)) {
+	addr, err := net.ResolveUDPAddr("udp", a)
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	list, err3 := net.Interfaces()
-	if err3 != nil {
-		for i := 0; i < len(list); i++ {
-			fmt.Printf("name %s\n", list[i].Name)
+	l, err := net.ListenMulticastUDP("udp", nil, addr)
+	l.SetReadBuffer(maxDatagramSize)
+	for {
+		b := make([]byte, maxDatagramSize)
+		n, src, err := l.ReadFromUDP(b)
+		if err != nil {
+			log.Fatal("ReadFromUDP failed:", err)
 		}
+		h(src, n, b)
 	}
-
-	//ifi, err2 := net.InterfaceByName(ifname) //ifi
-	//if err2 != nil {
-	//	log.Fatal(err2)
-	//}
-
-	fmt.Printf("usage:   %s %s %s\n", a, p, g)
-
-	//c, err3 := mcastOpen(a, p, ifname)
-	//if err3 != nil {
-	//	log.Fatal(err3)
-	//}
-	//
-	//if err := c.JoinGroup(ifi, &net.UDPAddr{IP: g}); err != nil {
-	//	log.Fatal(err)
-	//}
-	//
-	//if err := c.SetControlMessage(ipv4.FlagTTL|ipv4.FlagSrc|ipv4.FlagDst|ipv4.FlagInterface, true); err != nil {
-	//	log.Fatal(err)
-	//}
-	//
-	//readLoop(c)
-	//
-	//c.Close()
 }
-
-func splitHostPort(hostPort string) (string, string) {
-	s := strings.Split(hostPort, ":")
-	host := s[0]
-	if host == "" {
-		host = "0.0.0.0"
-	}
-	if len(s) == 1 {
-		return host, ""
-	}
-	return host, s[1]
-}
-
-//func mcastOpen(bindAddr net.IP, port int, ifname string) (*ipv4.PacketConn, error) {
-//	s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_UDP)
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//	if err := syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1); err != nil {
-//		log.Fatal(err)
-//	}
-//	//syscall.SetsockoptInt(s, syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
-//	if err := syscall.SetsockoptString(s, syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, ifname); err != nil {
-//		log.Fatal(err)
-//	}
-//
-//	lsa := syscall.SockaddrInet4{Port: port}
-//	copy(lsa.Addr[:], bindAddr.To4())
-//
-//	if err := syscall.Bind(s, &lsa); err != nil {
-//		syscall.Close(s)
-//		log.Fatal(err)
-//	}
-//	f := os.NewFile(uintptr(s), "")
-//	c, err := net.FilePacketConn(f)
-//	f.Close()
-//	if err != nil {
-//		log.Fatal(err)
-//	}
-//	p := ipv4.NewPacketConn(c)
-//
-//	return p, nil
-//}
-//
-//func readLoop(c *ipv4.PacketConn) {
-//
-//	log.Printf("readLoop: reading")
-//
-//	buf := make([]byte, 10000)
-//
-//	for {
-//		n, cm, _, err1 := c.ReadFrom(buf)
-//		if err1 != nil {
-//			log.Printf("readLoop: ReadFrom: error %v", err1)
-//			break
-//		}
-//
-//		var name string
-//
-//		ifi, err2 := net.InterfaceByIndex(cm.IfIndex)
-//		if err2 != nil {
-//			log.Printf("readLoop: unable to solve ifIndex=%d: error: %v", cm.IfIndex, err2)
-//		}
-//
-//		if ifi == nil {
-//			name = "ifname?"
-//		} else {
-//			name = ifi.Name
-//		}
-//
-//		log.Printf("readLoop: recv %d bytes from %s to %s on %s", n, cm.Src, cm.Dst, name)
-//	}
-//
-//	log.Printf("readLoop: exiting")
-//}
